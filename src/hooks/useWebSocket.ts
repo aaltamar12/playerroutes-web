@@ -25,25 +25,50 @@ export function useWebSocket({
   const wsRef = useRef<WebSocket | null>(null);
   const [connected, setConnected] = useState(false);
   const [sessions, setSessions] = useState<Map<string, PlayerSession>>(new Map());
-  const [worldTime, setWorldTime] = useState<number | null>(null); // 0-24000 ticks
+  const [worldTime, setWorldTime] = useState<number | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const historicalLoadedRef = useRef(false);
+  const isConnectingRef = useRef(false);
+  const isMountedRef = useRef(true);
+
+  // Store callbacks in refs to avoid dependency issues
+  const callbacksRef = useRef({
+    onSessionStart,
+    onSessionEnd,
+    onRoutePoint,
+    onCommandResponse,
+  });
+
+  // Update callbacks ref when they change
+  useEffect(() => {
+    callbacksRef.current = {
+      onSessionStart,
+      onSessionEnd,
+      onRoutePoint,
+      onCommandResponse,
+    };
+  }, [onSessionStart, onSessionEnd, onRoutePoint, onCommandResponse]);
+
+  // Store url and token in refs to use in callbacks without causing re-renders
+  const configRef = useRef({ url, token, apiUrl });
+  useEffect(() => {
+    configRef.current = { url, token, apiUrl };
+  }, [url, token, apiUrl]);
 
   // Fetch historical sessions from API
   const fetchHistoricalSessions = useCallback(async () => {
-    if (historicalLoadedRef.current) return;
+    if (historicalLoadedRef.current || !isMountedRef.current) return;
 
     try {
-      // Use apiUrl if provided, otherwise use relative URL
-      const baseUrl = apiUrl || '';
-      const response = await fetch(`${baseUrl}/api/sessions?limit=100`, {
+      const { apiUrl: baseUrl, token: authToken } = configRef.current;
+      const response = await fetch(`${baseUrl || ''}/api/sessions?limit=100`, {
         headers: {
-          'Authorization': `Bearer ${token}`,
+          'Authorization': `Bearer ${authToken}`,
         },
       });
 
-      if (response.ok) {
+      if (response.ok && isMountedRef.current) {
         const data = await response.json();
         if (data.sessions && Array.isArray(data.sessions)) {
           setSessions((prev) => {
@@ -63,50 +88,11 @@ export function useWebSocket({
     } catch (error) {
       console.error('Failed to fetch historical sessions:', error);
     }
-  }, [apiUrl, token]);
-
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      return;
-    }
-
-    const wsUrl = `${url}?token=${encodeURIComponent(token)}`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      console.log('WebSocket connected');
-      setConnected(true);
-      reconnectAttemptsRef.current = 0;
-    };
-
-    ws.onclose = (event) => {
-      console.log('WebSocket disconnected:', event.code, event.reason);
-      setConnected(false);
-      wsRef.current = null;
-
-      // Reconnect with exponential backoff
-      const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
-      reconnectAttemptsRef.current++;
-      reconnectTimeoutRef.current = setTimeout(connect, delay);
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const message: WebSocketMessage = JSON.parse(event.data);
-        handleMessage(message);
-      } catch (e) {
-        console.error('Failed to parse WebSocket message:', e);
-      }
-    };
-
-    wsRef.current = ws;
-  }, [url, token]);
+  }, []);
 
   const handleMessage = useCallback((message: WebSocketMessage) => {
+    if (!isMountedRef.current) return;
+
     switch (message.type) {
       case 'init':
         const newSessions = new Map<string, PlayerSession>();
@@ -114,11 +100,9 @@ export function useWebSocket({
           newSessions.set(session._id, session);
         }
         setSessions(newSessions);
-        // Set world time if present in init message
         if (typeof message.worldTime === 'number') {
           setWorldTime(message.worldTime);
         }
-        // Load historical sessions after receiving active ones
         fetchHistoricalSessions();
         break;
 
@@ -128,7 +112,7 @@ export function useWebSocket({
           next.set(message.session._id, message.session);
           return next;
         });
-        onSessionStart?.(message.session);
+        callbacksRef.current.onSessionStart?.(message.session);
         break;
 
       case 'session_end':
@@ -142,7 +126,7 @@ export function useWebSocket({
           }
           return next;
         });
-        onSessionEnd?.(message.sessionId, message.stats);
+        callbacksRef.current.onSessionEnd?.(message.sessionId, message.stats);
         break;
 
       case 'route_point':
@@ -153,7 +137,6 @@ export function useWebSocket({
             session.path.push(message.point);
             session.lastSeenAt = message.point.t;
             session.stats.samples++;
-            // Update distance (approximate)
             if (session.path.length > 1) {
               const lastPoint = session.path[session.path.length - 2];
               const dx = message.point.x - lastPoint.x;
@@ -163,11 +146,10 @@ export function useWebSocket({
           }
           return next;
         });
-        // Update world time if present
         if (typeof message.worldTime === 'number') {
           setWorldTime(message.worldTime);
         }
-        onRoutePoint?.(message.sessionId, message.point, message.conn);
+        callbacksRef.current.onRoutePoint?.(message.sessionId, message.point, message.conn);
         break;
 
       case 'time_update':
@@ -178,20 +160,111 @@ export function useWebSocket({
 
       case 'command_response':
         console.log('Command response:', message.success, message.message);
-        onCommandResponse?.(message.success, message.message);
+        callbacksRef.current.onCommandResponse?.(message.success, message.message);
         break;
     }
-  }, [onSessionStart, onSessionEnd, onRoutePoint, onCommandResponse, fetchHistoricalSessions]);
+  }, [fetchHistoricalSessions]);
 
+  const connect = useCallback(() => {
+    // Prevent multiple simultaneous connections
+    if (isConnectingRef.current || wsRef.current?.readyState === WebSocket.OPEN) {
+      return;
+    }
+
+    // Don't connect if unmounted
+    if (!isMountedRef.current) {
+      return;
+    }
+
+    isConnectingRef.current = true;
+
+    const { url: wsBaseUrl, token: wsToken } = configRef.current;
+    const wsUrl = `${wsBaseUrl}?token=${encodeURIComponent(wsToken)}`;
+
+    try {
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        if (!isMountedRef.current) {
+          ws.close();
+          return;
+        }
+        console.log('WebSocket connected');
+        setConnected(true);
+        reconnectAttemptsRef.current = 0;
+        isConnectingRef.current = false;
+      };
+
+      ws.onclose = (event) => {
+        console.log('WebSocket disconnected:', event.code, event.reason);
+        isConnectingRef.current = false;
+
+        if (!isMountedRef.current) {
+          return;
+        }
+
+        setConnected(false);
+        wsRef.current = null;
+
+        // Only reconnect if still mounted and not a normal closure
+        if (isMountedRef.current && event.code !== 1000) {
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+          reconnectAttemptsRef.current++;
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (isMountedRef.current) {
+              connect();
+            }
+          }, delay);
+        }
+      };
+
+      ws.onerror = () => {
+        // Only log error if we're still mounted (avoids noise from StrictMode cleanup)
+        if (isMountedRef.current) {
+          console.warn('WebSocket connection error - will retry');
+        }
+        isConnectingRef.current = false;
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message: WebSocketMessage = JSON.parse(event.data);
+          handleMessage(message);
+        } catch (e) {
+          console.error('Failed to parse WebSocket message:', e);
+        }
+      };
+
+      wsRef.current = ws;
+    } catch (error) {
+      console.error('Failed to create WebSocket:', error);
+      isConnectingRef.current = false;
+    }
+  }, [handleMessage]);
+
+  // Initial connection - only runs once on mount
   useEffect(() => {
-    connect();
+    isMountedRef.current = true;
+
+    // Small delay to avoid StrictMode double-connection issues
+    const connectTimer = setTimeout(() => {
+      if (isMountedRef.current) {
+        connect();
+      }
+    }, 100);
 
     return () => {
+      isMountedRef.current = false;
+      clearTimeout(connectTimer);
+
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
+
       if (wsRef.current) {
-        wsRef.current.close();
+        wsRef.current.close(1000, 'Component unmounted');
+        wsRef.current = null;
       }
     };
   }, [connect]);
@@ -199,11 +272,25 @@ export function useWebSocket({
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
     if (wsRef.current) {
-      wsRef.current.close();
+      wsRef.current.close(1000, 'Manual disconnect');
+      wsRef.current = null;
     }
   }, []);
+
+  const reconnect = useCallback(() => {
+    disconnect();
+    // Reset state for fresh connection
+    reconnectAttemptsRef.current = 0;
+    isConnectingRef.current = false;
+    setTimeout(() => {
+      if (isMountedRef.current) {
+        connect();
+      }
+    }, 100);
+  }, [disconnect, connect]);
 
   const sendMessage = useCallback((message: object) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -218,7 +305,7 @@ export function useWebSocket({
     sessions,
     worldTime,
     disconnect,
-    reconnect: connect,
+    reconnect,
     sendMessage,
   };
 }
