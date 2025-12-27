@@ -493,6 +493,50 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
       ctx.stroke();
       ctx.globalAlpha = 1;
 
+      // Draw direction indicators along the path
+      if (settings.showArrows) {
+        const minPixelDistance = 60; // Minimum pixels between arrows
+        let accumulatedDistance = 0;
+
+        for (let i = 1; i < pointsInDimension.length; i++) {
+          const [x1, y1] = toScreen(pointsInDimension[i - 1].x, pointsInDimension[i - 1].z);
+          const [x2, y2] = toScreen(pointsInDimension[i].x, pointsInDimension[i].z);
+
+          const segmentDistance = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+          accumulatedDistance += segmentDistance;
+
+          // Draw arrow when we've accumulated enough distance
+          if (accumulatedDistance >= minPixelDistance) {
+            accumulatedDistance = 0;
+
+            // Calculate midpoint of this segment
+            const midX = (x1 + x2) / 2;
+            const midY = (y1 + y2) / 2;
+
+            // Calculate angle
+            const angle = Math.atan2(y2 - y1, x2 - x1);
+            const chevronSize = settings.arrowSize;
+
+            // Draw chevron (two lines forming an arrow shape)
+            ctx.beginPath();
+            ctx.moveTo(
+              midX - chevronSize * Math.cos(angle - Math.PI / 4),
+              midY - chevronSize * Math.sin(angle - Math.PI / 4)
+            );
+            ctx.lineTo(midX, midY);
+            ctx.lineTo(
+              midX - chevronSize * Math.cos(angle + Math.PI / 4),
+              midY - chevronSize * Math.sin(angle + Math.PI / 4)
+            );
+            ctx.strokeStyle = settings.arrowColor;
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+          }
+        }
+      }
+
       // Draw start marker (small circle)
       ctx.beginPath();
       ctx.arc(startX, startY, 6, 0, Math.PI * 2);

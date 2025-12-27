@@ -11,6 +11,9 @@ export interface MapDisplaySettings {
   showLabels: boolean;
   labelSize: number;         // 8-16
   showInactivePaths: boolean;
+  arrowSize: number;         // 3-12
+  arrowColor: string;        // hex color
+  showArrows: boolean;       // toggle arrows
 }
 
 // Preset colors for routes
@@ -35,6 +38,9 @@ export const defaultSettings: MapDisplaySettings = {
   showLabels: true,
   labelSize: 11,
   showInactivePaths: true,
+  arrowSize: 6,
+  arrowColor: '#ffffff',
+  showArrows: true,
 };
 
 const STORAGE_KEY = 'playerroutes_map_settings';
@@ -179,6 +185,64 @@ export function MapSettings({ settings, onChange, isOpen, onClose }: MapSettings
           </div>
         </div>
 
+        {/* Arrow Size */}
+        <div>
+          <div className="flex justify-between text-xs mb-1">
+            <span className="text-slate-400">Arrow Size</span>
+            <span className="text-white">{localSettings.arrowSize}px</span>
+          </div>
+          <input
+            type="range"
+            min="3"
+            max="12"
+            step="1"
+            value={localSettings.arrowSize}
+            onChange={(e) => updateSetting('arrowSize', parseInt(e.target.value))}
+            className="w-full accent-blue-500"
+          />
+        </div>
+
+        {/* Arrow Color */}
+        <div>
+          <div className="flex justify-between text-xs mb-2">
+            <span className="text-slate-400">Arrow Color</span>
+            <div
+              className="w-5 h-5 rounded border border-slate-600"
+              style={{ backgroundColor: localSettings.arrowColor }}
+            />
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {routeColorPresets.map((color) => (
+              <button
+                key={color.value}
+                onClick={() => updateSetting('arrowColor', color.value)}
+                className={`w-6 h-6 rounded border-2 transition-all cursor-pointer ${
+                  localSettings.arrowColor === color.value
+                    ? 'border-white scale-110'
+                    : 'border-transparent hover:border-slate-500'
+                }`}
+                style={{ backgroundColor: color.value }}
+                title={color.name}
+              />
+            ))}
+            {/* Custom color input */}
+            <div className="relative">
+              <input
+                type="color"
+                value={localSettings.arrowColor}
+                onChange={(e) => updateSetting('arrowColor', e.target.value)}
+                className="w-6 h-6 rounded cursor-pointer opacity-0 absolute inset-0"
+              />
+              <div
+                className="w-6 h-6 rounded border-2 border-dashed border-slate-500 flex items-center justify-center text-slate-400 text-xs"
+                title="Custom color"
+              >
+                +
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Marker Size */}
         <div>
           <div className="flex justify-between text-xs mb-1">
@@ -248,6 +312,16 @@ export function MapSettings({ settings, onChange, isOpen, onClose }: MapSettings
               type="checkbox"
               checked={localSettings.showInactivePaths}
               onChange={(e) => updateSetting('showInactivePaths', e.target.checked)}
+              className="w-4 h-4 accent-blue-500"
+            />
+          </label>
+
+          <label className="flex items-center justify-between cursor-pointer">
+            <span className="text-xs text-slate-400">Show Direction Arrows</span>
+            <input
+              type="checkbox"
+              checked={localSettings.showArrows}
+              onChange={(e) => updateSetting('showArrows', e.target.checked)}
               className="w-4 h-4 accent-blue-500"
             />
           </label>
