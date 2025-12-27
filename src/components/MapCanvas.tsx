@@ -492,6 +492,45 @@ export const MapCanvas = forwardRef<MapCanvasRef, MapCanvasProps>(function MapCa
 
       ctx.stroke();
       ctx.globalAlpha = 1;
+
+      // Draw start marker (small circle)
+      ctx.beginPath();
+      ctx.arc(startX, startY, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#22c55e'; // Green for start
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Draw end arrow (if not active session, since active has the player marker)
+      if (!session.active && pointsInDimension.length >= 2) {
+        const lastPoint = pointsInDimension[pointsInDimension.length - 1];
+        const prevPoint = pointsInDimension[pointsInDimension.length - 2];
+        const [endX, endY] = toScreen(lastPoint.x, lastPoint.z);
+        const [prevX, prevY] = toScreen(prevPoint.x, prevPoint.z);
+
+        // Calculate angle
+        const angle = Math.atan2(endY - prevY, endX - prevX);
+        const arrowSize = 10;
+
+        // Draw arrowhead
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(
+          endX - arrowSize * Math.cos(angle - Math.PI / 6),
+          endY - arrowSize * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.lineTo(
+          endX - arrowSize * Math.cos(angle + Math.PI / 6),
+          endY - arrowSize * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.closePath();
+        ctx.fillStyle = '#ef4444'; // Red for end
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
     }
 
     // Draw current position marker for active sessions in this dimension

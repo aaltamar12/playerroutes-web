@@ -44,6 +44,8 @@ export function AuthGate({ children, onAuthenticated }: AuthGateProps) {
   const [validating, setValidating] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  // Use refs to track state in WebSocket callbacks (avoids stale closure issues)
+  const authSuccessRef = useRef(false);
 
   useEffect(() => {
     // Check for stored token and validate it
@@ -71,6 +73,7 @@ export function AuthGate({ children, onAuthenticated }: AuthGateProps) {
     setLoading(true);
     setValidating(true);
     setError('');
+    authSuccessRef.current = false;
 
     // Close any existing connection
     if (wsRef.current) {
@@ -85,11 +88,13 @@ export function AuthGate({ children, onAuthenticated }: AuthGateProps) {
       wsRef.current = ws;
 
       const timeout = setTimeout(() => {
-        ws.close();
-        setError('Connection timeout. Make sure the Minecraft mod is running.');
-        setLoading(false);
-        setValidating(false);
-        localStorage.removeItem(STORAGE_KEY);
+        if (!authSuccessRef.current) {
+          ws.close();
+          setError('Connection timeout. Make sure the Minecraft mod is running.');
+          setLoading(false);
+          setValidating(false);
+          localStorage.removeItem(STORAGE_KEY);
+        }
       }, 10000); // 10 second timeout
 
       ws.onopen = () => {
@@ -102,6 +107,7 @@ export function AuthGate({ children, onAuthenticated }: AuthGateProps) {
           if (message.type === 'init') {
             // Token is valid! The mod accepted our connection
             clearTimeout(timeout);
+            authSuccessRef.current = true;
             localStorage.setItem(STORAGE_KEY, tokenToValidate);
             localStorage.setItem(SERVER_CONFIG_KEY, JSON.stringify(config));
             setAuthenticated(true);
@@ -119,15 +125,18 @@ export function AuthGate({ children, onAuthenticated }: AuthGateProps) {
 
       ws.onerror = () => {
         clearTimeout(timeout);
-        setError('Connection failed. Check if the Minecraft mod is running.');
-        setLoading(false);
-        setValidating(false);
-        localStorage.removeItem(STORAGE_KEY);
+        if (!authSuccessRef.current) {
+          setError('Connection failed. Check if the Minecraft mod is running.');
+          setLoading(false);
+          setValidating(false);
+          localStorage.removeItem(STORAGE_KEY);
+        }
       };
 
       ws.onclose = (event) => {
         clearTimeout(timeout);
-        if (!authenticated && !error) {
+        // Only handle errors if auth wasn't successful
+        if (!authSuccessRef.current) {
           // Connection closed without successful auth
           if (event.code === 1008 || event.code === 4001 || event.code === 4003) {
             // Policy violation or custom auth error codes
