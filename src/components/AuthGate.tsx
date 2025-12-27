@@ -167,12 +167,16 @@ export function AuthGate({ children, onAuthenticated }: AuthGateProps) {
   // Get auto-detected URL for display
   const wsUrl = typeof window !== 'undefined' ? getAutoDetectedWsUrl() : `ws://localhost:${DEFAULT_WS_PORT}`;
 
-  if (loading && !validating) {
+  // Show loading screen while checking stored token or validating
+  const hasStoredToken = typeof window !== 'undefined' && localStorage.getItem(STORAGE_KEY);
+  const showLoadingScreen = loading || (validating && hasStoredToken);
+
+  if (showLoadingScreen) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-        <div className="text-white flex items-center gap-3">
-          <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-          <span>Connecting...</span>
+        <div className="text-white flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-3 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <span className="text-slate-300">Connecting to server...</span>
         </div>
       </div>
     );

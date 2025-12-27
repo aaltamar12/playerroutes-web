@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback, useRef, useMemo } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { AuthGate, ServerConfig } from '@/components/AuthGate';
 import { MapCanvas, MapCanvasRef } from '@/components/MapCanvas';
 import { PlayerList } from '@/components/PlayerList';
@@ -23,6 +23,7 @@ function MapApp({ token, serverConfig, onConfigChange, onLogout }: MapAppProps) 
   const [showSettings, setShowSettings] = useState(false);
   const [currentDimension, setCurrentDimension] = useState<Dimension>('overworld');
   const [commandResult, setCommandResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [initialLoading, setInitialLoading] = useState(true);
   const mapRef = useRef<MapCanvasRef>(null);
 
   const { connected, sessions, worldTime, reconnect, sendMessage } = useWebSocket({
@@ -44,6 +45,13 @@ function MapApp({ token, serverConfig, onConfigChange, onLogout }: MapAppProps) 
   });
 
   const selectedSession = selectedSessionId ? sessions.get(selectedSessionId) : null;
+
+  // Hide initial loading once connected
+  useEffect(() => {
+    if (connected && initialLoading) {
+      setInitialLoading(false);
+    }
+  }, [connected, initialLoading]);
 
   // Get current dimension for each active player
   const playerDimensions = useMemo(() => {
@@ -93,6 +101,18 @@ function MapApp({ token, serverConfig, onConfigChange, onLogout }: MapAppProps) 
       ...data,
     });
   };
+
+  // Show loading screen while connecting to WebSocket
+  if (initialLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-white flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-3 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <span className="text-slate-300">Loading map...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-slate-900">
