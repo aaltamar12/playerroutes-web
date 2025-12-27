@@ -1,65 +1,190 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useCallback, useRef, useMemo } from 'react';
+import { AuthGate, ServerConfig } from '@/components/AuthGate';
+import { MapCanvas, MapCanvasRef } from '@/components/MapCanvas';
+import { PlayerList } from '@/components/PlayerList';
+import { SessionDetails } from '@/components/SessionDetails';
+import { ConnectionStatus } from '@/components/ConnectionStatus';
+import { SettingsModal } from '@/components/SettingsModal';
+import { DimensionSelector, Dimension, dimensionToShort, dimensionToFull } from '@/components/DimensionSelector';
+import { WorldTime } from '@/components/WorldTime';
+import { useWebSocket } from '@/hooks/useWebSocket';
+
+interface MapAppProps {
+  token: string;
+  serverConfig: ServerConfig;
+  onConfigChange: (config: ServerConfig) => void;
+  onLogout: () => void;
+}
+
+function MapApp({ token, serverConfig, onConfigChange, onLogout }: MapAppProps) {
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [currentDimension, setCurrentDimension] = useState<Dimension>('overworld');
+  const [commandResult, setCommandResult] = useState<{ success: boolean; message: string } | null>(null);
+  const mapRef = useRef<MapCanvasRef>(null);
+
+  const { connected, sessions, worldTime, reconnect, sendMessage } = useWebSocket({
+    url: serverConfig.wsUrl,
+    token,
+    apiUrl: serverConfig.apiUrl,
+    onSessionStart: (session) => {
+      console.log('Session started:', session.playerName);
+    },
+    onSessionEnd: (sessionId) => {
+      console.log('Session ended:', sessionId);
+    },
+    onCommandResponse: (success, message) => {
+      console.log('Command response:', success, message);
+      setCommandResult({ success, message });
+      // Clear after 3 seconds
+      setTimeout(() => setCommandResult(null), 3000);
+    },
+  });
+
+  const selectedSession = selectedSessionId ? sessions.get(selectedSessionId) : null;
+
+  // Get current dimension for each active player
+  const playerDimensions = useMemo(() => {
+    const dims = new Map<string, string>();
+    sessions.forEach((session, sessionId) => {
+      if (session.active && session.path.length > 0) {
+        const lastPoint = session.path[session.path.length - 1];
+        dims.set(sessionId, lastPoint.dim);
+      }
+    });
+    return dims;
+  }, [sessions]);
+
+  // Auto-switch dimension when selecting a player in a different dimension
+  const handleDimensionChange = useCallback((dimension: Dimension) => {
+    setCurrentDimension(dimension);
+    // Reset view when switching dimensions
+    mapRef.current?.resetView();
+  }, []);
+
+  const handleSessionSelect = useCallback((sessionId: string | null) => {
+    setSelectedSessionId(sessionId);
+    // Center on selected player and switch to their dimension
+    if (sessionId) {
+      const session = sessions.get(sessionId);
+      if (session && session.path.length > 0) {
+        const lastPoint = session.path[session.path.length - 1];
+        // Switch to player's dimension
+        const playerDim = dimensionToShort(lastPoint.dim);
+        if (playerDim !== currentDimension) {
+          setCurrentDimension(playerDim);
+        }
+        mapRef.current?.centerOnPosition(lastPoint.x, lastPoint.z);
+      }
+    }
+  }, [sessions, currentDimension]);
+
+  const handleConfigSave = (newConfig: ServerConfig) => {
+    onConfigChange(newConfig);
+    // Reconnect with new config
+    setTimeout(() => reconnect(), 100);
+  };
+
+  const handleTeleport = (data: { player: string; targetPlayer?: string; x?: number; y?: number; z?: number }) => {
+    sendMessage({
+      type: 'teleport',
+      ...data,
+    });
+  };
+
+  return (
+    <div className="flex h-screen bg-slate-900">
+      {/* Left Panel - Player List */}
+      <PlayerList
+        sessions={sessions}
+        selectedSessionId={selectedSessionId}
+        onSessionSelect={handleSessionSelect}
+      />
+
+      {/* Main Map Area */}
+      <div className="flex-1 relative">
+        <ConnectionStatus
+          connected={connected}
+          onReconnect={reconnect}
+          onSettings={() => setShowSettings(true)}
+        />
+        {/* Dimension Selector and World Time */}
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3">
+          <DimensionSelector
+            currentDimension={currentDimension}
+            onDimensionChange={handleDimensionChange}
+            playerDimensions={playerDimensions}
+          />
+          <WorldTime worldTime={worldTime} />
+        </div>
+        <MapCanvas
+          ref={mapRef}
+          sessions={sessions}
+          selectedSessionId={selectedSessionId}
+          onSessionSelect={handleSessionSelect}
+          authToken={token}
+          apiBaseUrl={serverConfig.apiUrl}
+          currentDimension={currentDimension}
+          onRefreshTiles={(dimension) => sendMessage({ type: 'refresh_tiles', dimension })}
+        />
+      </div>
+
+      {/* Right Panel - Session Details */}
+      <SessionDetails
+        session={selectedSession || null}
+        sessions={sessions}
+        onClose={() => setSelectedSessionId(null)}
+        onTeleport={handleTeleport}
+        commandResult={commandResult}
+      />
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        currentConfig={serverConfig}
+        onSave={handleConfigSave}
+        onLogout={onLogout}
+      />
+    </div>
+  );
+}
 
 export default function Home() {
+  const [authToken, setAuthToken] = useState<string>('');
+  const [serverConfig, setServerConfig] = useState<ServerConfig>({ wsUrl: '', apiUrl: '' });
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
+  const handleAuthenticated = (token: string, config: ServerConfig) => {
+    setAuthToken(token);
+    setServerConfig(config);
+    setIsAuthenticated(true);
+  };
+
+  const handleConfigChange = (newConfig: ServerConfig) => {
+    setServerConfig(newConfig);
+    localStorage.setItem('playerroutes_server_config', JSON.stringify(newConfig));
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('playerroutes_auth_token');
+    localStorage.removeItem('playerroutes_server_config');
+    setAuthToken('');
+    setServerConfig({ wsUrl: '', apiUrl: '' });
+    setIsAuthenticated(false);
+    window.location.reload();
+  };
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <AuthGate onAuthenticated={handleAuthenticated}>
+      <MapApp
+        token={authToken}
+        serverConfig={serverConfig}
+        onConfigChange={handleConfigChange}
+        onLogout={handleLogout}
+      />
+    </AuthGate>
   );
 }
